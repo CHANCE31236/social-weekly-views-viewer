@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.spec
+build/
+dist/
+
+# Local user data
+accounts.json
+data/
+exports/
+last_error.log
+config.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Legacy private app files kept locally, not published
+README.txt
+README_PUBLIC_APP.txt
+run_app.bat
+weekly_views_app.py

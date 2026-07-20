@@ -1,0 +1,16 @@
+{
+  "accounts": [
+    {
+      "platform": "TikTok",
+      "account": "example_account",
+      "dashboard_url": "https://www.tiktok.com/tiktokstudio/analytics",
+      "public_url": "https://www.tiktok.com/@example_account"
+    },
+    {
+      "platform": "Instagram",
+      "account": "example_account",
+      "dashboard_url": "https://www.instagram.com/accounts/insights/",
+      "public_url": "https://www.instagram.com/example_account/"
+    }
+  ]
+}
