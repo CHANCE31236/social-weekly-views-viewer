@@ -30,13 +30,14 @@ Runtime files such as `accounts.json`, `data/`, `exports/`, and logs are ignored
 Install Python dependencies:
 
 ```powershell
-pip install -r requirements.txt
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ## Run
 
 ```powershell
-python social_views_viewer.py
+.\.venv\Scripts\python.exe social_views_viewer.py
 ```
 
 On Windows, users can also run:
@@ -62,4 +63,16 @@ If automatic reading fails, type the weekly views value manually.
 .\build_exe.bat
 ```
 
-The build uses PyInstaller.
+The build uses the same local `.venv`, installs `requirements-dev.txt`, runs the regression suite, and builds with PyInstaller. A failed install or test stops the build.
+
+## Validation and local data
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+GitHub Actions runs these tests on Windows. The tests cover account loading and renaming, saved-data preservation, URL detection, numeric/date validation, and literal text in CSV/Excel exports. OCR accuracy and live dashboard reading require manual validation with the relevant platform.
+
+An explicitly empty account list stays empty on restart. Malformed account or saved-view files produce a startup error so they can be corrected without replacing the existing data. Configuration writes use a temporary file followed by a replace.
+
+CSV exports prefix formula-like text with an apostrophe; Excel exports store text as strings. Entered view counts must be non-negative, and the two report dates must be valid and ordered.
