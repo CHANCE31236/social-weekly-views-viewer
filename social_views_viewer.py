@@ -70,6 +70,10 @@ TEXTS = {
         "public_url": "Public profile URL",
         "auto_detect": "Platform and account name will be detected automatically from the links.",
         "missing_url": "Please enter at least one URL.",
+        "invalid_url": "Enter a complete HTTP or HTTPS URL without embedded credentials.",
+        "duplicate_account": "This platform and account is already in the list. Use the public profile URL to identify each account.",
+        "invalid_views": "Enter a non-negative view count (for example 1,234 or 1.2K) for {account}.",
+        "invalid_dates": "Enter two valid dates in YYYY-MM-DD format, with the start on or before the end.",
         "save": "Save",
         "cancel": "Cancel",
         "col_platform": "Platform",
@@ -124,6 +128,10 @@ TEXTS = {
         "public_url": "公开主页链接",
         "auto_detect": "平台和账号名称会根据链接自动识别。",
         "missing_url": "请至少输入一个链接。",
+        "invalid_url": "请输入完整的 HTTP 或 HTTPS 链接，链接中不要包含登录凭据。",
+        "duplicate_account": "列表中已存在这个平台和账号。请使用公开主页链接区分各个账号。",
+        "invalid_views": "请为 {account} 输入非负浏览量，例如 1,234 或 1.2K。",
+        "invalid_dates": "请输入两个有效的 YYYY-MM-DD 日期，开始日期不能晚于结束日期。",
         "save": "保存",
         "cancel": "取消",
         "col_platform": "平台",
@@ -178,6 +186,10 @@ TEXTS = {
         "public_url": "URL du profil public",
         "auto_detect": "La plateforme et le nom du compte seront détectés automatiquement depuis les liens.",
         "missing_url": "Veuillez saisir au moins une URL.",
+        "invalid_url": "Saisissez une URL HTTP ou HTTPS complète sans identifiants intégrés.",
+        "duplicate_account": "Ce compte existe déjà pour cette plateforme. Utilisez l'URL du profil public pour identifier chaque compte.",
+        "invalid_views": "Saisissez un nombre de vues positif ou nul (par exemple 1,234 ou 1.2K) pour {account}.",
+        "invalid_dates": "Saisissez deux dates valides au format YYYY-MM-DD, avec le début avant ou égal à la fin.",
         "save": "Enregistrer",
         "cancel": "Annuler",
         "col_platform": "Plateforme",
@@ -249,13 +261,15 @@ def load_accounts() -> list[dict]:
         return list(DEFAULT_ACCOUNTS)
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        accounts = data.get("accounts", data if isinstance(data, list) else [])
+        if not isinstance(data, (dict, list)):
+            raise ValueError("accounts.json must contain an object or list")
+        accounts = data if isinstance(data, list) else data.get("accounts", [])
         if not isinstance(accounts, list):
             raise ValueError("accounts.json must be a list or contain an accounts list")
         clean = []
         for item in accounts:
             if not isinstance(item, dict):
-                continue
+                raise ValueError("Each account must be an object")
             dashboard_url = str(item.get("dashboard_url", "")).strip()
             public_url = str(item.get("public_url", item.get("guest_url", ""))).strip()
             inferred = infer_account(dashboard_url, public_url)
@@ -267,18 +281,24 @@ def load_accounts() -> list[dict]:
                     "public_url": public_url,
                 }
             )
-        return clean or list(DEFAULT_ACCOUNTS)
+        return clean
     except Exception:
         log_error("Failed to load accounts.json")
-        return list(DEFAULT_ACCOUNTS)
+        raise ValueError("Could not load accounts.json. Check its format before restarting; the file has been preserved.")
 
 
 def save_accounts(accounts: list[dict]) -> None:
     ensure_dirs()
-    CONFIG_FILE.write_text(
-        json.dumps({"accounts": accounts}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json(CONFIG_FILE, {"accounts": accounts})
+
+
+def write_json(path: Path, value: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def compact_account_name(value: str) -> str:
@@ -293,19 +313,45 @@ def compact_account_name(value: str) -> str:
     return value
 
 
+def url_host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def valid_web_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme in {"http", "https"}
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and not any(character.isspace() for character in url)
+        )
+    except ValueError:
+        return False
+
+
 def detect_platform(*urls: str) -> str:
-    joined = " ".join(urls).lower()
-    if "youtube.com" in joined or "youtu.be" in joined:
+    hosts = [url_host(url) for url in urls]
+    matches = lambda domain: any(host_matches(host, domain) for host in hosts)
+    if matches("youtube.com") or matches("youtu.be"):
         return "YouTube"
-    if "tiktok.com" in joined:
+    if matches("tiktok.com"):
         return "TikTok"
-    if "instagram.com" in joined or "business.facebook.com" in joined and "instagram" in joined:
+    if matches("instagram.com"):
         return "Instagram"
-    if "facebook.com" in joined or "business.facebook.com" in joined:
+    if matches("facebook.com"):
         return "Facebook"
-    if "linkedin.com" in joined:
+    if matches("linkedin.com"):
         return "LinkedIn"
-    if "x.com" in joined or "twitter.com" in joined:
+    if matches("x.com") or matches("twitter.com"):
         return "X"
     return "Other"
 
@@ -317,18 +363,18 @@ def detect_account_from_url(url: str) -> str:
         parsed = urlparse(url)
     except Exception:
         return ""
-    host = parsed.netloc.lower()
+    host = url_host(url)
     path_parts = [part for part in parsed.path.split("/") if part]
     query = parse_qs(parsed.query)
 
-    if "tiktok.com" in host:
+    if host_matches(host, "tiktok.com"):
         for part in path_parts:
             if part.startswith("@"):
                 return compact_account_name(part)
-    if "instagram.com" in host:
+    if host_matches(host, "instagram.com"):
         if path_parts:
             return compact_account_name(path_parts[0])
-    if "youtube.com" in host:
+    if host_matches(host, "youtube.com"):
         for part in path_parts:
             if part.startswith("@"):
                 return compact_account_name(part)
@@ -336,7 +382,7 @@ def detect_account_from_url(url: str) -> str:
             idx = path_parts.index("channel")
             if idx + 1 < len(path_parts):
                 return compact_account_name(path_parts[idx + 1])
-    if "facebook.com" in host:
+    if host_matches(host, "facebook.com"):
         for key in ("asset_id", "page_id", "id"):
             if query.get(key):
                 return compact_account_name(query[key][0])
@@ -350,7 +396,9 @@ def detect_account_from_url(url: str) -> str:
 
 
 def infer_account(dashboard_url: str, public_url: str) -> dict:
-    platform = detect_platform(public_url, dashboard_url)
+    platform = detect_platform(public_url)
+    if platform == "Other":
+        platform = detect_platform(dashboard_url)
     account = detect_account_from_url(public_url) or detect_account_from_url(dashboard_url)
     if not account:
         account = f"{platform} account"
@@ -375,9 +423,11 @@ def default_date_range() -> str:
 
 def parse_date_range(value: str) -> tuple[str, str]:
     matches = re.findall(r"\d{4}-\d{2}-\d{2}", value or "")
-    if len(matches) >= 2:
-        return matches[0], matches[1]
-    start, end = last_7_day_range()
+    if len(matches) != 2:
+        raise ValueError("Enter two dates in YYYY-MM-DD format")
+    start, end = (date.fromisoformat(item) for item in matches)
+    if start > end:
+        raise ValueError("The start date must not be after the end date")
     return start.isoformat(), end.isoformat()
 
 
@@ -391,15 +441,17 @@ def load_state() -> dict:
             raise ValueError("state must be a dict")
         data.setdefault("date_range", default_date_range())
         data.setdefault("rows", {})
+        if not isinstance(data["rows"], dict) or any(not isinstance(row, dict) for row in data["rows"].values()):
+            raise ValueError("state rows must map account keys to objects")
         return data
-    except Exception:
+    except Exception as exc:
         log_error("Failed to load state")
-        return {"date_range": default_date_range(), "rows": {}}
+        raise ValueError("Could not load saved views. Check data/state.json before restarting; the file has been preserved.") from exc
 
 
 def save_state(state: dict) -> None:
     ensure_dirs()
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(STATE_FILE, state)
 
 
 def edge_executable() -> str:
@@ -416,6 +468,8 @@ def edge_executable() -> str:
 def open_url(url: str) -> None:
     if not url:
         return
+    if not valid_web_url(url):
+        raise ValueError("Only complete HTTP and HTTPS URLs can be opened")
     try:
         subprocess.Popen(
             [edge_executable(), url],
@@ -486,7 +540,7 @@ def parse_number_token(text: str) -> tuple[str, int] | None:
                 return None
             total += parsed[1]
         return raw, total
-    match = re.search(r"(\d+(?:\.\d+)?)([kKmMwW万]?)", compact)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmMwW万]?)", compact)
     if not match:
         return None
     value = float(match.group(1))
@@ -716,10 +770,18 @@ def find_number_near_views_ocr(items: list[dict]) -> int | None:
     return best
 
 
+def csv_literal(value):
+    if isinstance(value, str) and (
+        value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(("=", "+", "-", "@"))
+    ):
+        return "'" + value
+    return value
+
+
 def write_csv(path: Path, rows: list[list]) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
-        writer.writerows(rows)
+        writer.writerows([[csv_literal(value) for value in row] for row in rows])
 
 
 def write_xlsx(path: Path, rows: list[list]) -> bool:
@@ -735,6 +797,9 @@ def write_xlsx(path: Path, rows: list[list]) -> bool:
     ws.title = "Weekly Views"
     for row in rows:
         ws.append(row)
+        for cell in ws[ws.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
     header_fill = PatternFill("solid", fgColor="17324D")
     for cell in ws[1]:
         cell.font = Font(color="FFFFFF", bold=True)
@@ -784,6 +849,9 @@ class AccountDialog:
         public_url = self.public_url.get().strip()
         if not dashboard_url and not public_url:
             messagebox.showwarning(self.t("account_settings"), self.t("missing_url"))
+            return
+        if any(url and not valid_web_url(url) for url in (dashboard_url, public_url)):
+            messagebox.showwarning(self.t("account_settings"), self.t("invalid_url"))
             return
         self.result = infer_account(dashboard_url, public_url)
         self.window.destroy()
@@ -925,6 +993,9 @@ class SocialViewsApp:
     def add_account(self) -> None:
         dialog = AccountDialog(self.root, TEXTS.get(self.lang(), TEXTS["en"]))
         if dialog.result:
+            if any(self.key_for(account) == self.key_for(dialog.result) for account in self.accounts):
+                messagebox.showwarning(self.t("account_settings"), self.t("duplicate_account"))
+                return
             self.accounts.append(dialog.result)
             self.auto_save()
             self.state = self.current_state()
@@ -936,10 +1007,13 @@ class SocialViewsApp:
         dialog = AccountDialog(self.root, TEXTS.get(self.lang(), TEXTS["en"]), self.accounts[index])
         if dialog.result:
             old_key = self.key_for(self.accounts[index])
-            self.accounts[index] = dialog.result
             new_key = self.key_for(dialog.result)
-            if old_key in self.state.get("rows", {}) and old_key != new_key:
-                self.state["rows"][new_key] = self.state["rows"].pop(old_key)
+            if any(account is not item and self.key_for(account) == new_key for account in self.accounts):
+                messagebox.showwarning(self.t("account_settings"), self.t("duplicate_account"))
+                return
+            if old_key != new_key and old_key in self.view_vars:
+                self.view_vars[new_key] = self.view_vars.pop(old_key)
+            self.accounts[index] = dialog.result
             self.auto_save()
             self.state = self.current_state()
             self.build_ui()
@@ -1046,12 +1120,16 @@ class SocialViewsApp:
         range_text = self.date_range.get().strip()
         for item in self.accounts:
             key = self.key_for(item)
-            raw = self.view_vars.get(key, StringVar(value="")).get().strip()
+            variable = self.view_vars.get(key)
+            raw = variable.get().strip() if variable is not None else ""
+            parsed = parse_number_token(raw) if raw else None
+            if raw and parsed is None:
+                raise ValueError(self.t("invalid_views", account=item.get("account", "")))
             rows.append(
                 [
                     item.get("platform", ""),
                     item.get("account", ""),
-                    safe_int(raw) if raw else 0,
+                    parsed[1] if parsed else 0,
                     range_text,
                     raw,
                 ]
@@ -1061,7 +1139,10 @@ class SocialViewsApp:
     def export_report(self) -> None:
         try:
             self.auto_save()
-            start, end = parse_date_range(self.date_range.get())
+            try:
+                start, end = parse_date_range(self.date_range.get())
+            except ValueError as exc:
+                raise ValueError(self.t("invalid_dates")) from exc
             filename = f"social_weekly_views_{start}_to_{end}"
             rows = self.export_rows()
             desktop_xlsx = DESKTOP / f"{filename}.xlsx"
@@ -1078,6 +1159,9 @@ class SocialViewsApp:
                 self.t("export_title"),
                 self.t("export_success", path=desktop_xlsx if xlsx_ok else desktop_csv),
             )
+        except ValueError as exc:
+            self.status.set(self.t("export_failed"))
+            messagebox.showwarning(self.t("export_title"), str(exc))
         except Exception:
             log_error("Export report failed")
             self.status.set(self.t("export_failed"))
@@ -1096,8 +1180,12 @@ def main() -> None:
             pass
         SocialViewsApp(root)
         root.mainloop()
-    except Exception:
+    except Exception as exc:
         log_error("Application startup failed")
+        try:
+            messagebox.showerror(APP_NAME, str(exc))
+        except Exception:
+            pass
         sys.exit(1)
 
 

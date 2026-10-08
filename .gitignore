@@ -1,4 +1,6 @@
 __pycache__/
+.venv/
+.pytest_cache/
 *.py[cod]
 *.pyo
 *.spec
@@ -11,6 +13,7 @@ data/
 exports/
 last_error.log
 config.json
+*.json.tmp
 
 # OS/editor files
 .DS_Store
